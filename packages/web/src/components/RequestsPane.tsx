@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, Check, Copy } from "@phosphor-icons/react";
 import type { RequestSummary } from "@wiretap/shared";
-import { formatBytes, formatTime, formatUsd, shortId } from "../lib/format.ts";
+import {
+  formatBytes,
+  formatRequestTime,
+  formatTime,
+  formatTokens,
+  formatUsd,
+  shortId,
+} from "../lib/format.ts";
 import { modelFamily, shortModel } from "../lib/model.ts";
 import {
   Spinner,
@@ -11,8 +18,12 @@ import {
   StatusChip,
   CostChip,
   Select,
+  OriginBadge,
 } from "./ui.tsx";
 import type { SelectOption } from "./ui.tsx";
+
+/** Below this cache-hit share the row is flagged red. */
+const LOW_CACHE_RATE = 0.5;
 
 /** Hover text breaking a row's cost into the buckets that produced it. */
 function costTitle(r: RequestSummary): string {
@@ -28,6 +39,31 @@ function costTitle(r: RequestSummary): string {
     .filter(([, v]) => v > 0)
     .map(([k, v]) => `${k}  ${formatUsd(v)}`);
   return [`${formatUsd(c.total)} estimated`, ...lines].join("\n");
+}
+
+/** One compact token bucket on the request row; full count is in the title. */
+function TokenStat({
+  label,
+  value,
+  title,
+  suffix,
+  tone = "default",
+}: {
+  label: string;
+  value: number | null;
+  title: string;
+  suffix?: string;
+  tone?: "default" | "error";
+}) {
+  const valueClass = tone === "error" ? "text-block-error" : "text-muted";
+  const suffixClass = tone === "error" ? "text-block-error" : "text-faint/70";
+  return (
+    <span className="tnum inline-flex items-baseline gap-1" title={title}>
+      <span className="text-faint/70">{label}</span>
+      <span className={valueClass}>{formatTokens(value)}</span>
+      {suffix && <span className={suffixClass}>{suffix}</span>}
+    </span>
+  );
 }
 
 export function RequestsPane({
@@ -101,7 +137,7 @@ export function RequestsPane({
 
   if (!sessionId) {
     return (
-      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-surface">
+      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
         <EmptyState
           title="Select a session"
           hint="Pick a session on the left to list its captured requests."
@@ -111,7 +147,7 @@ export function RequestsPane({
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-surface">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
       <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-xs font-semibold tracking-wide text-ink">
@@ -167,44 +203,102 @@ export function RequestsPane({
         {error && <ErrorState message={error} />}
         {rows.map((r) => {
           const active = r.file === selectedFile;
+          const lowCache =
+            r.cacheHitRate != null && r.cacheHitRate < LOW_CACHE_RATE;
+          const cachePct =
+            r.cacheHitRate == null
+              ? undefined
+              : `${Math.round(r.cacheHitRate * 100)}%`;
+          const cacheTokens =
+            r.cacheReadTokens == null && r.cacheWriteTokens == null
+              ? null
+              : (r.cacheReadTokens ?? 0) + (r.cacheWriteTokens ?? 0);
+          const cacheTitle =
+            [
+              r.cacheReadTokens != null
+                ? `cache read ${r.cacheReadTokens.toLocaleString()}`
+                : null,
+              r.cacheWriteTokens != null
+                ? `cache write ${r.cacheWriteTokens.toLocaleString()}`
+                : null,
+              cachePct ? `hit rate ${cachePct}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "no cache usage reported";
           return (
             <button
               key={r.file}
               onClick={() => onSelect(r.file)}
-              className={`flex w-full items-center gap-2 border-l-2 px-3 py-1.5 text-left transition-colors ${
+              title={
+                lowCache
+                  ? `low cache hit rate (${cachePct}) — below ${LOW_CACHE_RATE * 100}%`
+                  : undefined
+              }
+              className={`flex w-full flex-col gap-0.5 border-l-2 px-3 py-1.5 text-left transition-colors ${
                 active
                   ? "border-accent bg-elevated"
-                  : "border-transparent hover:bg-surface-2"
+                  : lowCache
+                    ? "border-block-error/70 bg-block-error/5 hover:bg-block-error/10"
+                    : "border-transparent hover:bg-surface-2"
               }`}
             >
-              <span className="tnum w-9 shrink-0 text-[13px] text-faint">
-                #{String(r.seq).padStart(4, "0")}
-              </span>
-              <ModelBadge
-                label={shortModel(r.model)}
-                family={modelFamily(r.model)}
-              />
-              <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap">
-                <StatusChip status={r.status} />
-                <CostChip
-                  usd={r.cost?.total ?? null}
-                  title={r.cost ? costTitle(r) : undefined}
-                  className="w-14 text-right"
-                />
-                {/* Keep the unit: bare against the message count next to it,
-                    two adjacent numbers read as one ambiguous pair. */}
-                <span
-                  className="tnum w-16 text-right text-[12px] text-faint"
-                  title="output tokens"
-                >
-                  {r.outputTokens != null
-                    ? `${r.outputTokens.toLocaleString()} out`
-                    : ""}
+              <span className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="tnum w-9 shrink-0 text-[13px] text-faint">
+                  #{String(r.seq).padStart(4, "0")}
                 </span>
-                <span className="tnum text-[12px] text-faint" title="messages">
+                <OriginBadge origin={r.origin} />
+                <ModelBadge
+                  label={shortModel(r.model)}
+                  family={modelFamily(r.model)}
+                />
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                  <span
+                    className="tnum text-[12px] text-faint"
+                    title={r.timestamp}
+                  >
+                    {formatRequestTime(r.timestamp)}
+                  </span>
+                  <StatusChip status={r.status} />
+                  <CostChip
+                    usd={r.cost?.total ?? null}
+                    title={r.cost ? costTitle(r) : undefined}
+                    className="w-14 text-right"
+                  />
+                </span>
+              </span>
+              <span className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 pl-9 text-[12px] text-faint">
+                <TokenStat
+                  label="in"
+                  value={r.inputTokens}
+                  title={
+                    r.inputTokens == null
+                      ? "no input usage reported"
+                      : `input ${r.inputTokens.toLocaleString()} tokens (includes cached input for OpenAI-compatible providers)`
+                  }
+                />
+                <TokenStat
+                  label="cache"
+                  value={cacheTokens}
+                  suffix={cachePct}
+                  tone={lowCache ? "error" : "default"}
+                  title={cacheTitle}
+                />
+                <TokenStat
+                  label="out"
+                  value={r.outputTokens}
+                  title={
+                    r.outputTokens == null
+                      ? "no output usage reported"
+                      : `output ${r.outputTokens.toLocaleString()} tokens (reasoning included)`
+                  }
+                />
+                <span className="tnum ml-auto" title="messages">
                   {r.messageCount} msg
                 </span>
-                <span className="tnum w-12 text-right text-[12px] text-faint">
+                <span
+                  className="tnum w-12 text-right"
+                  title={`${r.size.toLocaleString()} bytes`}
+                >
                   {formatBytes(r.size)}
                 </span>
               </span>

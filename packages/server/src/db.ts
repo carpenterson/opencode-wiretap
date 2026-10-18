@@ -50,41 +50,89 @@ export async function dbAvailable(): Promise<boolean> {
 const CHUNK = 900;
 
 /**
+ * OpenCode 2.x moved live sessions from `session` to `session_v2`; the legacy
+ * table still holds sessions that were never migrated. Read both, newest
+ * schema first.
+ */
+const SESSION_TABLES = ["session_v2", "session"] as const;
+const SESSION_COLUMNS = "id, title, parent_id AS parentId, directory";
+
+interface SessionRow {
+  id: string;
+  title: string | null;
+  parentId: string | null;
+  directory: string | null;
+}
+
+function sessionRows(
+  conn: SqliteDriver,
+  table: string,
+  ids: string[],
+): SessionRow[] {
+  const placeholders = ids.map(() => "?").join(",");
+  return conn.all(
+    `SELECT ${SESSION_COLUMNS} FROM ${table} WHERE id IN (${placeholders})`,
+    ids,
+  ) as SessionRow[];
+}
+
+/**
+ * Merge a chunk of ids from both session tables into one metadata map. A
+ * value from `session_v2` wins; the legacy row fills in anything v2 left
+ * null. Exported for tests — `getSessionMeta` is the production entry point.
+ */
+export function readSessionMeta(
+  conn: SqliteDriver,
+  ids: string[],
+): Map<string, SessionMeta> {
+  const out = new Map<string, SessionMeta>();
+
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const byTable = new Map<string, Map<string, SessionRow>>();
+
+    for (const table of SESSION_TABLES) {
+      try {
+        const rows = sessionRows(conn, table, chunk);
+        byTable.set(table, new Map(rows.map((r) => [r.id, r])));
+      } catch {
+        // Pre-V2 databases have no session_v2 table; schema drift on either
+        // table just means that table contributes nothing.
+      }
+    }
+
+    const live = byTable.get("session_v2");
+    const legacy = byTable.get("session");
+    for (const id of chunk) {
+      const v2 = live?.get(id);
+      const v1 = legacy?.get(id);
+      if (!v2 && !v1) continue;
+      out.set(id, {
+        title: v2?.title ?? v1?.title ?? null,
+        parentId: v2?.parentId ?? v1?.parentId ?? null,
+        directory: v2?.directory ?? v1?.directory ?? null,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Batch-resolve session metadata by id. Missing ids and any DB error degrade
  * gracefully to an empty map (callers fall back to id-only display).
  */
 export async function getSessionMeta(
   ids: string[],
 ): Promise<Map<string, SessionMeta>> {
-  const out = new Map<string, SessionMeta>();
-  if (ids.length === 0) return out;
+  if (ids.length === 0) return new Map();
   const conn = await getDb();
-  if (!conn) return out;
+  if (!conn) return new Map();
 
   try {
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunk = ids.slice(i, i + CHUNK);
-      const placeholders = chunk.map(() => "?").join(",");
-      const rows = conn.all(
-        `SELECT id, title, parent_id AS parentId, directory
-           FROM session WHERE id IN (${placeholders})`,
-        chunk,
-      ) as Array<{
-        id: string;
-        title: string | null;
-        parentId: string | null;
-        directory: string | null;
-      }>;
-      for (const r of rows) {
-        out.set(r.id, {
-          title: r.title,
-          parentId: r.parentId,
-          directory: r.directory,
-        });
-      }
-    }
+    return readSessionMeta(conn, ids);
   } catch {
     // Schema drift or read error — return whatever we gathered.
+    return new Map();
   }
-  return out;
 }

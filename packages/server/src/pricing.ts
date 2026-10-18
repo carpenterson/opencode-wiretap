@@ -70,16 +70,38 @@ const HOSTS: Record<string, { provider: string; convention: UsageConvention }> =
     },
   };
 
+/**
+ * Resolve the token-accounting convention for a captured URL, or null when
+ * the host is not one we know. Used for display-side ratios as well as cost.
+ */
+export function usageConvention(url: string): UsageConvention | null {
+  try {
+    return HOSTS[new URL(url).hostname]?.convention ?? null;
+  } catch {
+    return null;
+  }
+}
+
 interface RawCost {
   input?: unknown;
   output?: unknown;
   cache_read?: unknown;
   cache_write?: unknown;
+  /** models.dev nests context tiers inside `cost` in the current cache. */
+  tiers?: RawTier[];
+}
+
+interface RawTier extends RawCost {
+  tier?: { type?: string; size?: unknown };
 }
 
 interface RawModel {
   cost?: RawCost;
-  tiers?: Array<RawCost & { tier?: { type?: string; size?: unknown } }>;
+  /**
+   * Older cache snapshots put tiers on the model itself; current models.json
+   * uses `cost.tiers`. Accept both so an old cache still prices correctly.
+   */
+  tiers?: RawTier[];
 }
 
 export interface Catalogue {
@@ -119,7 +141,10 @@ function toPricing(model: RawModel): ModelPricing | null {
   const base = toPrice(model.cost);
   if (!base) return null;
   const tiers: PriceTier[] = [];
-  for (const raw of model.tiers ?? []) {
+  // Current models.json: `cost.tiers`. Pre-2026 snapshots: `model.tiers`.
+  // `cost.context_over_200k` is the legacy single-threshold spelling and is
+  // redundant wherever `cost.tiers` exists, so it is deliberately ignored.
+  for (const raw of model.cost?.tiers ?? model.tiers ?? []) {
     // Only context-size tiers are meaningful here; models.dev has no others
     // today, but an unknown tier type must not be applied blindly.
     if (raw.tier?.type !== "context") continue;

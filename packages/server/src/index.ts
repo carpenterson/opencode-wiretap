@@ -9,12 +9,19 @@ import type {
   CapturedRequest,
   CostBreakdown,
 } from "@wiretap/shared";
-import { getRequestMessages, computeCost } from "@wiretap/shared";
+import {
+  getRequestMessages,
+  computeCost,
+  cacheHitRate as computeCacheHitRate,
+  detectRequestOrigin,
+  type RequestOrigin,
+} from "@wiretap/shared";
 import { getSessionMeta, dbAvailable, dbPath } from "./db.ts";
 import {
   catalogue,
   resolvePricing,
   pricingAvailable,
+  usageConvention,
   modelsPath,
 } from "./pricing.ts";
 import {
@@ -163,8 +170,13 @@ app.get("/api/sessions/:id", async (req, res) => {
         // Null rather than 0: a request still in flight, and one written
         // before responses were captured, genuinely have no status.
         let status: number | null = null;
+        let inputTokens: number | null = null;
         let outputTokens: number | null = null;
+        let cacheReadTokens: number | null = null;
+        let cacheWriteTokens: number | null = null;
+        let cacheHitRate: number | null = null;
         let cost: CostBreakdown | null = null;
+        let origin: RequestOrigin | null = null;
         try {
           const st = await fs.stat(full);
           size = st.size;
@@ -174,8 +186,16 @@ app.get("/api/sessions/:id", async (req, res) => {
           messageCount = getRequestMessages(json.body).length;
           timestamp = json.timestamp ?? "";
           status = json.response?.status ?? null;
+          origin = detectRequestOrigin(json.body);
           const usage = json.response?.message?.usage;
+          inputTokens = usage?.input_tokens ?? null;
           outputTokens = usage?.output_tokens ?? null;
+          cacheReadTokens = usage?.cache_read_input_tokens ?? null;
+          cacheWriteTokens = usage?.cache_creation_input_tokens ?? null;
+          const convention = usageConvention(json.url ?? "");
+          if (usage && convention) {
+            cacheHitRate = computeCacheHitRate(usage, convention);
+          }
           if (cat && usage) {
             const priced = resolvePricing(cat, json.url ?? "", model);
             if (priced) {
@@ -193,8 +213,13 @@ app.get("/api/sessions/:id", async (req, res) => {
           messageCount,
           size,
           status,
+          inputTokens,
           outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          cacheHitRate,
           cost,
+          origin,
         };
       }),
     );

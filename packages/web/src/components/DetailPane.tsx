@@ -21,6 +21,7 @@ import { allExpanded, collapseAllNested, JsonView } from "react-json-view-lite";
 import {
   getRequestMessages,
   getRequestSystem,
+  detectRequestOrigin,
   type CapturedRequest,
   type CapturedResponse,
   type ContentBlock,
@@ -35,17 +36,26 @@ import { Markdown } from "./Markdown.tsx";
 import { modelFamily, shortModel } from "../lib/model.ts";
 import {
   isSystemPromptText,
+  parseHeadingSections,
   parsePromptSegments,
+  parseSkills,
+  parseToolCatalog,
   segTitle,
   startsWithSystemIdentity,
 } from "../lib/systemPrompt.ts";
-import type { PromptSegment } from "../lib/systemPrompt.ts";
+import type {
+  HeadingSection,
+  PromptSegment,
+  SkillEntry,
+  ToolGroup,
+} from "../lib/systemPrompt.ts";
 import {
   Spinner,
   ErrorState,
   EmptyState,
   ModelBadge,
   StatusChip,
+  OriginBadge,
 } from "./ui.tsx";
 
 const COLLAPSE_CHARS = 600;
@@ -98,6 +108,7 @@ export function DetailPane({
   );
 
   const body = data?.body;
+  const origin = detectRequestOrigin(body);
   const messages = getRequestMessages(body);
   const compressedIndices = useMemo(
     () => messages.flatMap((m, i) => (messageIsCompressed(m) ? [i] : [])),
@@ -123,6 +134,7 @@ export function DetailPane({
 
   const system = getRequestSystem(body);
   const tools = body?.tools ?? [];
+  const maxTokens = body?.max_tokens ?? body?.max_completion_tokens;
 
   const allCollapsed = messages.length > 0 && collapsed.size >= messages.length;
   const toggleAll = () =>
@@ -163,11 +175,14 @@ export function DetailPane({
           />
         )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[13px] text-faint">
-          {body?.max_tokens != null && (
-            <Meta k="max_tokens" v={body.max_tokens.toLocaleString()} />
+          {maxTokens != null && (
+            <Meta k="max_tokens" v={maxTokens.toLocaleString()} />
           )}
           {body?.temperature != null && (
             <Meta k="temp" v={String(body.temperature)} />
+          )}
+          {body?.reasoning_effort != null && (
+            <Meta k="reasoning" v={body.reasoning_effort} />
           )}
           {body?.thinking?.budget_tokens != null && (
             <Meta
@@ -182,6 +197,7 @@ export function DetailPane({
             long. Surface its status up here so a failed call is visible
             without scrolling. */}
         {data && <StatusChip status={data.response?.status ?? null} />}
+        {data && <OriginBadge origin={origin} />}
         <div className="ml-auto flex items-center gap-1">
           {!raw && compressedIndices.length > 0 && (
             <button
@@ -415,7 +431,12 @@ function SystemSection({ system }: { system: string | SystemBlock[] }) {
 function ToolsSection({
   tools,
 }: {
-  tools: Array<{ name?: string; description?: string; [k: string]: unknown }>;
+  tools: Array<{
+    name?: string;
+    description?: string;
+    function?: { name?: string; description?: string };
+    [k: string]: unknown;
+  }>;
 }) {
   return (
     <Section
@@ -425,18 +446,24 @@ function ToolsSection({
       count={tools.length}
     >
       <div className="flex flex-col divide-y divide-border">
-        {tools.map((t, i) => (
-          <div key={i} className="px-3 py-2">
-            <div className="tnum text-[14px] font-medium text-block-tool-use">
-              {t.name ?? "(unnamed)"}
-            </div>
-            {t.description && (
-              <div className="mt-0.5 line-clamp-2 text-[13px] text-muted">
-                {t.description}
+        {tools.map((t, i) => {
+          // Anthropic names tools at the top level; Chat Completions wraps
+          // them in a `function` object.
+          const name = t.name ?? t.function?.name;
+          const description = t.description ?? t.function?.description;
+          return (
+            <div key={i} className="px-3 py-2">
+              <div className="tnum text-[14px] font-medium text-block-tool-use">
+                {name ?? "(unnamed)"}
               </div>
-            )}
-          </div>
-        ))}
+              {description && (
+                <div className="mt-0.5 line-clamp-2 text-[13px] text-muted">
+                  {description}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </Section>
   );
@@ -597,6 +624,7 @@ function isCompressedText(text: string): boolean {
 function messageIsCompressed(message: Message): boolean {
   const content = message.content;
   if (typeof content === "string") return isCompressedText(content);
+  if (!Array.isArray(content)) return false;
   return content.some(
     (b) => b?.type === "text" && isCompressedText(b.text ?? ""),
   );
@@ -619,7 +647,9 @@ function MessageCard({
   const blocks: ContentBlock[] =
     typeof message.content === "string"
       ? [{ type: "text", text: message.content }]
-      : message.content;
+      : Array.isArray(message.content)
+        ? message.content
+        : [];
   const compressed = messageIsCompressed(message);
 
   return (
@@ -968,11 +998,6 @@ const MAX_SEGMENT_DEPTH = 5;
 function SegmentList({ text, depth }: { text: string; depth: number }) {
   const segments = useMemo(() => parsePromptSegments(text), [text]);
 
-  // Nothing structural to split out — render as plain (collapsible) text.
-  if (segments.length === 1 && segments[0].kind === "prose") {
-    return <CollapsibleText text={segments[0].text} bare />;
-  }
-
   return (
     <div className="flex flex-col gap-1.5">
       {segments.map((seg, i) => (
@@ -983,8 +1008,16 @@ function SegmentList({ text, depth }: { text: string; depth: number }) {
 }
 
 function SegmentView({ seg, depth }: { seg: PromptSegment; depth: number }) {
+  const skills = useMemo(
+    () =>
+      seg.kind === "xml" && seg.tag === "available_skills"
+        ? parseSkills(seg.text)
+        : [],
+    [seg],
+  );
+
   if (seg.kind === "prose") {
-    return <CollapsibleText text={seg.text} bare />;
+    return <ProseView text={seg.text} />;
   }
   if (seg.kind === "instructions") {
     return (
@@ -995,7 +1028,20 @@ function SegmentView({ seg, depth }: { seg: PromptSegment; depth: number }) {
         accent="var(--color-block-tool-use)"
         meta={lineMeta(seg.text)}
       >
-        <CollapsibleText text={seg.text} bare />
+        <ProseView text={seg.text} />
+      </SubCollapsible>
+    );
+  }
+  if (seg.tag === "available_skills" && skills.length > 0) {
+    return (
+      <SubCollapsible
+        icon={<BracketsAngle size={11} weight="bold" />}
+        label={`<available_skills> · ${skills.length}`}
+        title={`${skills.length} available skills`}
+        accent="var(--color-block-tool-use)"
+        meta={`${skills.length} skills`}
+      >
+        <SkillsList skills={skills} />
       </SubCollapsible>
     );
   }
@@ -1016,6 +1062,174 @@ function SegmentView({ seg, depth }: { seg: PromptSegment; depth: number }) {
         <SegmentList text={seg.text} depth={depth + 1} />
       )}
     </SubCollapsible>
+  );
+}
+
+/** Markdown prose, with every `#`/`##` heading turned into its own
+ *  collapsible section. Code fences and inline code are left to Markdown. */
+function ProseView({ text }: { text: string }) {
+  const { intro, sections } = useMemo(() => parseHeadingSections(text), [text]);
+
+  if (sections.length === 0) return <Markdown text={text} />;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {intro && <Markdown text={intro} />}
+      {sections.map((section, i) => (
+        <HeadingSectionView key={i} section={section} />
+      ))}
+    </div>
+  );
+}
+
+const TOOL_HEADING_RE = /^(available\s+)?tools$/i;
+
+function HeadingSectionView({ section }: { section: HeadingSection }) {
+  const [open, setOpen] = useState(section.level <= 1);
+  const catalog = useMemo(
+    () =>
+      TOOL_HEADING_RE.test(section.title)
+        ? parseToolCatalog(section.body)
+        : null,
+    [section.title, section.body],
+  );
+  const groups = catalog?.groups ?? [];
+  const rest = catalog?.rest ?? "";
+  const toolCount = groups.reduce((n, g) => n + g.tools.length, 0);
+  const hasCatalog = groups.some((g) => g.tools.length > 0);
+
+  return (
+    <div
+      className={
+        section.level === 1
+          ? "overflow-hidden rounded border border-border/70 bg-surface-2/30"
+          : "border-l border-border/70 pl-2"
+      }
+    >
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors hover:bg-surface-2"
+      >
+        {open ? (
+          <CaretDown size={11} className="shrink-0 text-faint" />
+        ) : (
+          <CaretRight size={11} className="shrink-0 text-faint" />
+        )}
+        <span className="shrink-0 font-mono text-[11px] text-faint/70">
+          {"#".repeat(section.level)}
+        </span>
+        <span className="truncate text-[14px] font-semibold text-ink">
+          {section.title}
+        </span>
+        {hasCatalog && (
+          <span className="tnum ml-auto shrink-0 text-[11px] text-faint">
+            {toolCount} tools
+          </span>
+        )}
+        {section.children.length > 0 && (
+          <span className="tnum ml-auto shrink-0 text-[11px] text-faint">
+            {section.children.length}{" "}
+            {section.children.length === 1 ? "section" : "sections"}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 px-2 pt-1 pb-2">
+          {hasCatalog ? (
+            <>
+              <ToolCatalogView groups={groups} />
+              {rest && <ProseView text={rest} />}
+            </>
+          ) : (
+            section.body && <ProseView text={section.body} />
+          )}
+          {section.children.map((child, i) => (
+            <HeadingSectionView key={i} section={child} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Numbered tool groups; each signature opens as code. */
+function ToolCatalogView({ groups }: { groups: ToolGroup[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {groups.map((group, gi) => (
+        <div key={gi} className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <span className="tnum shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[11px] font-semibold text-ink">
+              {gi + 1}
+            </span>
+            <span className="text-[14px] font-semibold text-ink">
+              {group.name}
+            </span>
+            {group.count != null && (
+              <span className="text-[12px] text-faint">
+                {group.count} tools
+              </span>
+            )}
+          </div>
+          {group.description && (
+            <div className="pl-7 text-[13px] text-muted">
+              {group.description}
+            </div>
+          )}
+          <div className="flex flex-col gap-1 pl-3">
+            {group.tools.map((tool, ti) => (
+              <SubCollapsible
+                key={ti}
+                icon={<Wrench size={11} weight="bold" />}
+                label={`${gi + 1}.${ti + 1} ${tool.name}`}
+                title={tool.name}
+                accent="var(--color-block-tool-use)"
+                meta={`${tool.signature.split("\n").length} lines`}
+              >
+                <CollapsibleText text={tool.signature} bare />
+              </SubCollapsible>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Numbered skills list from the `<available_skills>` block. */
+function SkillsList({ skills }: { skills: SkillEntry[] }) {
+  return (
+    <ol className="flex list-none flex-col gap-1.5">
+      {skills.map((skill, i) => (
+        <li key={i} className="flex gap-2">
+          <span className="tnum mt-0.5 shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[11px] font-semibold text-muted">
+            {i + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span className="text-[13px] font-semibold text-ink">
+                {skill.name}
+              </span>
+              {skill.id && skill.id !== skill.name && (
+                <span className="font-mono text-[11px] text-faint">
+                  {skill.id}
+                </span>
+              )}
+            </div>
+            {skill.description && (
+              <div className="text-[13px] text-muted">
+                <Markdown text={skill.description} />
+              </div>
+            )}
+            {skill.location && (
+              <div className="font-mono text-[11px] break-all text-faint">
+                {skill.location}
+              </div>
+            )}
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 }
 

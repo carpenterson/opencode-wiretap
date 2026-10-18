@@ -97,6 +97,21 @@ export function contextTokens(
   return b.input + b.cacheRead + b.cacheWrite;
 }
 
+/**
+ * Share of the prompt that was served from cache, or null when the request
+ * reports no prompt at all. Uses normalized buckets, so OpenAI's cached
+ * tokens are not counted twice.
+ */
+export function cacheHitRate(
+  usage: Usage,
+  convention: UsageConvention,
+): number | null {
+  const b = billableTokens(usage, convention);
+  const prompt = b.input + b.cacheRead + b.cacheWrite;
+  if (prompt <= 0) return null;
+  return b.cacheRead / prompt;
+}
+
 /** The rate sheet in force for a given context size: the highest tier reached. */
 export function effectivePrice(
   pricing: ModelPricing,

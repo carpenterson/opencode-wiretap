@@ -1,8 +1,14 @@
-import type { ContentBlock, Message, RequestBody } from "./types.ts";
+import type {
+  ChatToolCall,
+  ContentBlock,
+  Message,
+  RequestBody,
+  RequestMessage,
+} from "./types.ts";
 import { parseJsonLoose } from "./json.ts";
 
 function normalizeContent(
-  content: string | ContentBlock[] | undefined,
+  content: string | ContentBlock[] | null | undefined,
 ): ContentBlock[] {
   if (typeof content === "string") return [{ type: "text", text: content }];
   if (!Array.isArray(content)) return [];
@@ -17,10 +23,55 @@ function normalizeContent(
   });
 }
 
+function toolUseBlock(call: ChatToolCall): ContentBlock {
+  return {
+    type: "tool_use",
+    id: call.id,
+    name: call.function?.name,
+    input: parseJsonLoose(call.function?.arguments),
+  };
+}
+
+/**
+ * Normalize one OpenAI Chat Completions message. Anthropic messages flow
+ * through the same path: they simply carry none of the chat-only fields.
+ */
+function normalizeMessage(message: RequestMessage): Message {
+  // A Chat Completions tool result is its own turn, keyed by tool_call_id.
+  // Turn it into the same tool_result block the UI already renders for the
+  // Responses API.
+  if (typeof message.tool_call_id === "string") {
+    return {
+      role: message.role,
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: message.tool_call_id,
+          content: message.content ?? "",
+        },
+      ],
+    };
+  }
+
+  const blocks: ContentBlock[] = [];
+  if (
+    typeof message.reasoning_content === "string" &&
+    message.reasoning_content
+  ) {
+    blocks.push({ type: "thinking", thinking: message.reasoning_content });
+  }
+  blocks.push(...normalizeContent(message.content));
+  if (Array.isArray(message.tool_calls)) {
+    for (const call of message.tool_calls) blocks.push(toolUseBlock(call));
+  }
+
+  return { role: message.role, content: blocks };
+}
+
 /** Normalize Anthropic Messages and OpenAI Responses payloads into one UI shape. */
 export function getRequestMessages(body: RequestBody | undefined): Message[] {
   if (!body) return [];
-  if (Array.isArray(body.messages)) return body.messages;
+  if (Array.isArray(body.messages)) return body.messages.map(normalizeMessage);
   if (!Array.isArray(body.input)) return [];
 
   return body.input.map((item): Message => {

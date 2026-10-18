@@ -23,6 +23,37 @@ export interface Message {
   content: string | ContentBlock[];
 }
 
+/** One tool call on an OpenAI Chat Completions assistant turn. */
+export interface ChatToolCall {
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    /** JSON, but streamed as fragments and not guaranteed to parse. */
+    arguments?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+/**
+ * One entry of a captured `messages` array, before normalization.
+ *
+ * Anthropic Messages sends `content` as a string or block array. OpenAI Chat
+ * Completions additionally puts `tool_calls` on the assistant turn, `content:
+ * null` when that turn is only tool calls, and tool output in separate
+ * `role: "tool"` messages keyed by `tool_call_id`. DeepSeek and OpenRouter add
+ * `reasoning_content`. Readers must normalize before rendering.
+ */
+export interface RequestMessage {
+  role: string;
+  content: string | ContentBlock[] | null;
+  tool_calls?: ChatToolCall[];
+  tool_call_id?: string;
+  reasoning_content?: string;
+  [key: string]: unknown;
+}
+
 /** Captured OpenAI Responses API input item. */
 export interface ResponseInputItem {
   role?: string;
@@ -46,16 +77,30 @@ export interface SystemBlock {
 export interface RequestBody {
   model?: string;
   max_tokens?: number;
+  /** OpenAI Chat Completions' spelling of `max_tokens`. */
+  max_completion_tokens?: number;
   temperature?: number;
   stream?: boolean;
+  /** OpenAI reasoning effort hint (low / medium / high). */
+  reasoning_effort?: string;
   thinking?: { type?: string; budget_tokens?: number };
   instructions?: string;
   system?: string | SystemBlock[];
-  messages?: Message[];
+  messages?: RequestMessage[];
   input?: ResponseInputItem[];
   tools?: Array<{
+    /**
+     * Anthropic sends `name`/`description` at the top level; OpenAI Chat
+     * Completions nests them under `function`.
+     */
+    type?: string;
     name?: string;
     description?: string;
+    function?: {
+      name?: string;
+      description?: string;
+      [key: string]: unknown;
+    };
     [key: string]: unknown;
   }>;
   [key: string]: unknown;
@@ -154,8 +199,24 @@ export interface RequestSummary {
   size: number; // bytes
   /** HTTP status of the response; null when no response was captured. */
   status: number | null;
+  /** Reported input tokens; null when unknown. */
+  inputTokens: number | null;
   /** Output tokens the model reported; null when unknown. */
   outputTokens: number | null;
+  /** Cache-read tokens the model reported; null when unknown. */
+  cacheReadTokens: number | null;
+  /** Cache-write tokens the model reported; null when unknown. */
+  cacheWriteTokens: number | null;
+  /**
+   * Share of prompt tokens served from cache, 0–1. Null when no usage was
+   * captured or the provider's accounting convention is unknown.
+   */
+  cacheHitRate: number | null;
+  /**
+   * Which OpenCode generation produced this request, inferred from the body.
+   * Null when the body has no recognizable V1/V2 marker.
+   */
+  origin: "v1" | "v2" | null;
   /**
    * USD cost, computed at read time from reported usage and the local price
    * table. Null when there is no usage to price or no rates for the model —

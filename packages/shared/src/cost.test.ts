@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   billableTokens,
+  cacheHitRate,
   computeCost,
   contextTokens,
   effectivePrice,
@@ -86,6 +87,28 @@ describe("contextTokens", () => {
 
   test("excludes output tokens", () => {
     expect(contextTokens({ output_tokens: 9_999 }, "disjoint")).toBe(0);
+  });
+});
+
+describe("cacheHitRate", () => {
+  test("uses the same prompt denominator for both conventions", () => {
+    const anthropic = {
+      input_tokens: 200,
+      cache_read_input_tokens: 800,
+      cache_creation_input_tokens: 0,
+    };
+    expect(cacheHitRate(anthropic, "disjoint")).toBe(0.8);
+
+    const openai = { input_tokens: 1_000, cache_read_input_tokens: 800 };
+    expect(cacheHitRate(openai, "cached-within-input")).toBe(0.8);
+  });
+
+  test("reports a cold prompt as zero, not unknown", () => {
+    expect(cacheHitRate({ input_tokens: 1_000 }, "disjoint")).toBe(0);
+  });
+
+  test("returns null when no prompt was reported", () => {
+    expect(cacheHitRate({ output_tokens: 10 }, "disjoint")).toBeNull();
   });
 });
 

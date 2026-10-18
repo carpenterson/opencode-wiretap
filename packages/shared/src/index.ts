@@ -6,6 +6,8 @@
 export type {
   ContentBlock,
   Message,
+  ChatToolCall,
+  RequestMessage,
   ResponseInputItem,
   SystemBlock,
   RequestBody,
@@ -19,12 +21,18 @@ export type {
 } from "./types.ts";
 
 export { getRequestMessages, getRequestSystem } from "./normalize.ts";
+export {
+  detectRequestOrigin,
+  getRequestSystemText,
+  type RequestOrigin,
+} from "./origin.ts";
 
 export { parseSseEvents, parseSseData, type SseEvent } from "./sse.ts";
 export { assembleResponse } from "./assemble.ts";
 
 export {
   billableTokens,
+  cacheHitRate,
   contextTokens,
   effectivePrice,
   computeCost,

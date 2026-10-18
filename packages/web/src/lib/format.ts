@@ -38,6 +38,28 @@ export function formatRelative(iso: string): string {
   return `${days}d ago`;
 }
 
+/** Compact request timestamp: clock for today, date + clock otherwise. */
+export function formatRequestTime(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) return time;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")} ${time.slice(0, 5)}`;
+}
+
 /**
  * USD, with precision that follows the magnitude — a single cheap request can
  * land near $0.0001 while a session total runs to dollars, and one fixed
@@ -50,6 +72,20 @@ export function formatUsd(v: number): string {
   if (v >= 0.01) return `$${v.toFixed(3)}`;
   if (v >= 0.0001) return `$${v.toFixed(4)}`;
   return "<$0.0001";
+}
+
+/**
+ * Token counts in the fixed-width request list. The full number stays in the
+ * tooltip; the row only needs enough precision to compare magnitudes.
+ */
+export function formatTokens(n: number | null): string {
+  if (n == null) return "—";
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) {
+    const k = n / 1_000;
+    return `${k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return `${(n / 1_000_000).toFixed(2).replace(/\.?0+$/, "")}M`;
 }
 
 /** Short session id: strip the `ses_` prefix, keep a readable head+tail. */

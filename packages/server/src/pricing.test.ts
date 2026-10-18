@@ -78,6 +78,40 @@ describe("buildCatalogue", () => {
     ]);
   });
 
+  test("reads tiers nested under cost (the models.dev shape)", () => {
+    const nested = buildCatalogue({
+      p: {
+        models: {
+          m: {
+            cost: {
+              input: 1,
+              output: 2,
+              tiers: [
+                {
+                  input: 3,
+                  output: 4,
+                  cache_read: 0.5,
+                  tier: { type: "context", size: 200_000 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(nested.byQualified.get("p/m")?.tiers).toEqual([
+      {
+        size: 200_000,
+        price: {
+          input: 3,
+          output: 4,
+          cache_read: 0.5,
+          cache_write: undefined,
+        },
+      },
+    ]);
+  });
+
   test("ignores tiers of an unrecognised type", () => {
     const odd = buildCatalogue({
       p: {

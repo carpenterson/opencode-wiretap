@@ -4,6 +4,8 @@ import {
   MagnifyingGlass,
   CaretRight,
   CaretDown,
+  CaretDoubleLeft,
+  CaretDoubleRight,
   ArrowElbowDownRight,
   ArrowsInLineVertical,
   ArrowsOutLineVertical,
@@ -108,6 +110,8 @@ export function SessionsPane({
   selectedId,
   onSelect,
   onRefresh,
+  isCollapsed,
+  onToggleCollapse,
 }: {
   sessions: SessionSummary[];
   loading: boolean;
@@ -115,6 +119,8 @@ export function SessionsPane({
   selectedId: string | null;
   onSelect: (id: string) => void;
   onRefresh: () => void;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<Sort>("recent");
@@ -179,8 +185,32 @@ export function SessionsPane({
   const toggleAll = () =>
     setCollapsed(allCollapsed ? new Set() : new Set(collapsibleIds));
 
+  if (isCollapsed) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center gap-2 overflow-hidden border-r border-border bg-surface py-2">
+        <button
+          onClick={onToggleCollapse}
+          title="Expand sessions"
+          aria-label="Expand sessions"
+          className="rounded p-1 text-muted transition-colors hover:bg-elevated hover:text-ink active:translate-y-px"
+        >
+          <CaretDoubleRight size={14} weight="bold" />
+        </button>
+        <span
+          className="tnum text-[11px] text-faint"
+          title={`${sessions.length} sessions`}
+        >
+          {sessions.length}
+        </span>
+        <span className="mt-2 rotate-180 text-[10px] font-semibold tracking-[0.18em] text-faint [writing-mode:vertical-rl]">
+          SESSIONS
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-surface">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
       <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="flex items-baseline gap-2">
           <span className="text-xs font-semibold tracking-wide text-ink">
@@ -189,6 +219,14 @@ export function SessionsPane({
           <span className="tnum text-[13px] text-faint">{sessions.length}</span>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={onToggleCollapse}
+            title="Collapse sessions"
+            aria-label="Collapse sessions"
+            className="rounded p-1 text-muted transition-colors hover:bg-elevated hover:text-ink active:translate-y-px"
+          >
+            <CaretDoubleLeft size={14} weight="bold" />
+          </button>
           {collapsibleIds.length > 0 && (
             <button
               onClick={toggleAll}

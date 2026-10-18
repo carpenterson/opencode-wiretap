@@ -2,6 +2,8 @@
 // (Bun, watched) and the @wiretap/web Vite dev server together, each in
 // its own workspace directory, forwarding output and Ctrl-C to both.
 
+import { fileURLToPath } from "node:url";
+
 const procs = [
   {
     name: "api",
@@ -21,7 +23,9 @@ const reset = "\x1b[0m";
 
 const children = procs.map((p) => {
   const child = Bun.spawn(p.cmd, {
-    cwd: new URL(`../${p.cwd}/`, import.meta.url).pathname,
+    // `fileURLToPath`, not `.pathname`: the latter yields `/D:/…` on Windows,
+    // which Bun reports as ENOENT for the executable.
+    cwd: fileURLToPath(new URL(`../${p.cwd}/`, import.meta.url)),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, FORCE_COLOR: "1" },

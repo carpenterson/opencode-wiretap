@@ -351,3 +351,34 @@ export function ModelBadge({
     </span>
   );
 }
+
+/**
+ * Which OpenCode generation produced a request. There is no reliable
+ * session-level answer once V2 migrates old sessions, so this is shown per
+ * capture: `v1`/`v2` from the request body, `null` when it carries no marker.
+ */
+export function OriginBadge({ origin }: { origin: "v1" | "v2" | null }) {
+  if (!origin) {
+    return (
+      <span
+        className="tnum inline-flex w-6 shrink-0 justify-center rounded px-1 py-0.5 text-[10px] leading-none font-semibold text-faint/60"
+        title="OpenCode version could not be inferred from this body"
+      >
+        —
+      </span>
+    );
+  }
+  const family = origin === "v2" ? "gpt" : "other";
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded px-1 py-0.5 text-[10px] leading-none font-semibold tracking-wide uppercase"
+      style={{
+        color: `var(--model-${family})`,
+        backgroundColor: `var(--model-${family}-bg)`,
+      }}
+      title={`sent by OpenCode ${origin.toUpperCase()}`}
+    >
+      {origin}
+    </span>
+  );
+}
