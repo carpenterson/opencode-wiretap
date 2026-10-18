@@ -19,6 +19,7 @@ status, so the reasoning behind the reversal has something to point at.
 | 011 | [V1/V2 origin is inferred per request from the body](011-request-origin-inferred-from-body.md)                    |
 | 012 | [Panes resize with splitters; sessions collapse to a rail](012-panes-resize-with-splitters.md)                    |
 | 013 | [Low cache-hit requests are flagged at 50%](013-low-cache-hit-requests-flagged.md)                                |
+| 014 | [Capture numbers are per-session; display order comes from filenames](014-capture-sequence-per-session.md)        |
 
 `TEMPLATE.md` is the shape of a new record. Add each decision to the table
 when it is created.

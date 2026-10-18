@@ -31,6 +31,7 @@ import {
   cachePath,
 } from "./costcache.ts";
 import { parseArgs, USAGE, type Options } from "./config.ts";
+import { orderRequests } from "./order.ts";
 
 /** Parse CLI options, printing usage and exiting on `--help` or bad input. */
 function resolveOptions(): Options {
@@ -224,8 +225,7 @@ app.get("/api/sessions/:id", async (req, res) => {
       }),
     );
 
-    rows.sort((a, b) => a.seq - b.seq);
-    res.json(rows);
+    res.json(orderRequests(rows));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -13,6 +13,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
 } from "node:fs";
@@ -36,7 +37,27 @@ export function logRoot(): string {
   );
 }
 
-let sequence = 0;
+/**
+ * Next number for a session directory, derived from the files already there.
+ *
+ * The counter used to be a module global. That made numbering reset whenever
+ * the plugin was reloaded (session compaction, CLI restart) and collide with
+ * captures from earlier runs in the same directory. The directory is the
+ * durable record, so it is also the right source of truth.
+ */
+function nextSequence(dir: string): number {
+  let max = -1;
+  try {
+    for (const name of readdirSync(dir)) {
+      const match = /_(\d+)\.json$/.exec(name);
+      if (match) max = Math.max(max, Number(match[1]));
+    }
+  } catch {
+    // Directory missing or unreadable: start from zero and let the write
+    // itself report the failure if it still cannot proceed.
+  }
+  return max + 1;
+}
 
 /** Write `text` to `file` via a temp file and a rename. */
 function writeAtomic(file: string, text: string): void {
@@ -71,7 +92,7 @@ export function writeRequest(
 
     const now = new Date();
     const ts = now.toISOString().replace(/[:.]/g, "-");
-    const seq = String(sequence++).padStart(4, "0");
+    const seq = String(nextSequence(dir)).padStart(4, "0");
     const file = join(dir, `${ts}_${seq}.json`);
 
     const envelope: CapturedRequest = {
